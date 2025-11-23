@@ -31,9 +31,10 @@ export class GdmLiveAudio extends LitElement {
 
   @query('#captions') private captionsContainer: HTMLDivElement;
 
-  // PDF text limits to prevent API errors
-  private readonly MAX_CHARS_PER_PDF = 50000; // ~50k characters per PDF
-  private readonly MAX_TOTAL_CHARS = 150000; // ~150k total characters for all PDFs
+  // PDF chunking configuration
+  private readonly CHUNK_SIZE = 3000; // Characters per chunk
+  private readonly CHUNK_OVERLAP = 200; // Overlap between chunks for context
+  private readonly MAX_CHUNKS_IN_CONTEXT = 50; // Maximum chunks to include in system instruction
 
   private client: GoogleGenAI;
   private session: Session | null = null;
@@ -51,7 +52,7 @@ export class GdmLiveAudio extends LitElement {
   private sourceNode: AudioBufferSourceNode;
   private scriptProcessorNode: ScriptProcessorNode;
   private sources = new Set<AudioBufferSourceNode>();
-  private pdfTextContents = new Map<string, string>();
+  private pdfChunks = new Map<string, Array<{ text: string; index: number }>>();
 
   private videoElement: HTMLVideoElement;
   private videoCanvas: HTMLCanvasElement;
@@ -450,45 +451,45 @@ export class GdmLiveAudio extends LitElement {
     const model = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
     let combinedPdfText = '';
-    let totalChars = 0;
-    let truncatedFiles: string[] = [];
+    let totalChunksIncluded = 0;
 
-    if (this.pdfTextContents.size > 0) {
+    if (this.pdfChunks.size > 0) {
       let docIndex = 1;
-      for (const [fileName, text] of this.pdfTextContents.entries()) {
-        // Truncate individual PDF if too large
-        let processedText = text;
-        if (text.length > this.MAX_CHARS_PER_PDF) {
-          processedText = text.substring(0, this.MAX_CHARS_PER_PDF);
-          truncatedFiles.push(fileName);
-        }
 
-        // Check if adding this document would exceed total limit
-        if (totalChars + processedText.length > this.MAX_TOTAL_CHARS) {
-          const remainingSpace = this.MAX_TOTAL_CHARS - totalChars;
-          if (remainingSpace > 1000) { // Only include if we have at least 1000 chars space
-            processedText = processedText.substring(0, remainingSpace);
-            truncatedFiles.push(fileName);
-          } else {
-            // Skip this document entirely
-            continue;
+      for (const [fileName, chunks] of this.pdfChunks.entries()) {
+        combinedPdfText += `--- START OF DOCUMENT ${docIndex}: ${fileName} (${chunks.length} chunks) ---\n\n`;
+
+        // Include chunks up to the limit
+        for (const chunk of chunks) {
+          if (totalChunksIncluded >= this.MAX_CHUNKS_IN_CONTEXT) {
+            combinedPdfText += `\n[... Additional chunks omitted due to context size limits ...]\n`;
+            break;
           }
+
+          combinedPdfText += `[Chunk ${chunk.index + 1}]\n${chunk.text}\n\n`;
+          totalChunksIncluded++;
         }
 
-        combinedPdfText += `--- START OF DOCUMENT ${docIndex}: ${fileName} ---\n\n${processedText}\n\n--- END OF DOCUMENT ${docIndex} ---\n\n`;
-        totalChars += processedText.length;
+        combinedPdfText += `--- END OF DOCUMENT ${docIndex} ---\n\n`;
         docIndex++;
+
+        if (totalChunksIncluded >= this.MAX_CHUNKS_IN_CONTEXT) {
+          break;
+        }
       }
 
-      // Warn user if files were truncated
-      if (truncatedFiles.length > 0) {
-        console.warn(`The following PDFs were truncated due to size limits: ${truncatedFiles.join(', ')}`);
-        this.updateStatus(`⚠️ Some PDFs were truncated due to size limits: ${truncatedFiles.join(', ')}`);
+      // Inform user about chunk usage
+      const totalChunks = Array.from(this.pdfChunks.values()).reduce((sum, chunks) => sum + chunks.length, 0);
+      if (totalChunksIncluded < totalChunks) {
+        console.warn(`Using ${totalChunksIncluded} of ${totalChunks} total chunks due to context limits`);
+        this.updateStatus(`📄 Using ${totalChunksIncluded} of ${totalChunks} chunks from PDFs`);
+      } else {
+        this.updateStatus(`📄 Loaded ${totalChunks} chunks from ${this.pdfChunks.size} PDF(s)`);
       }
     }
 
     const systemInstruction = combinedPdfText
-      ? `You are a helpful assistant. Please answer the user's questions based exclusively on the content of the following documents. If the answer is not in the documents, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`
+      ? `You are a helpful assistant. Please answer the user's questions based exclusively on the content of the following documents. The documents have been split into chunks for processing. If the answer is not in the provided chunks, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`
       : undefined;
 
     // Prepare tools configuration
@@ -814,7 +815,7 @@ export class GdmLiveAudio extends LitElement {
     }
     await this.initSession();
     this.updateStatus(
-      this.pdfTextContents.size > 0
+      this.pdfChunks.size > 0
         ? 'PDF context applied. Session reset.'
         : 'Session settings updated.',
     );
@@ -829,6 +830,28 @@ export class GdmLiveAudio extends LitElement {
     this.isGoogleSearchEnabled = (e.target as HTMLInputElement).checked;
     this.reset();
   }
+
+  private splitTextIntoChunks(text: string): Array<{ text: string; index: number }> {
+    const chunks: Array<{ text: string; index: number }> = [];
+    let startIndex = 0;
+    let chunkIndex = 0;
+
+    while (startIndex < text.length) {
+      const endIndex = Math.min(startIndex + this.CHUNK_SIZE, text.length);
+      const chunkText = text.substring(startIndex, endIndex);
+
+      chunks.push({
+        text: chunkText,
+        index: chunkIndex
+      });
+
+      chunkIndex++;
+      startIndex += this.CHUNK_SIZE - this.CHUNK_OVERLAP;
+    }
+
+    return chunks;
+  }
+
 
   private processSinglePdf(file: File): Promise<string> {
     return new Promise((resolve, reject) => {
@@ -872,12 +895,6 @@ export class GdmLiveAudio extends LitElement {
 
       try {
         const text = await this.processSinglePdf(file);
-
-        // Inform user if the extracted text is very large
-        if (text.length > this.MAX_CHARS_PER_PDF) {
-          console.warn(`PDF "${file.name}" extracted ${text.length} characters, will be truncated to ${this.MAX_CHARS_PER_PDF}`);
-        }
-
         newContents.set(file.name, text);
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
@@ -885,11 +902,14 @@ export class GdmLiveAudio extends LitElement {
       }
     }
 
+    // Convert text to chunks and store
     for (const [name, text] of newContents.entries()) {
-      if (!this.pdfTextContents.has(name)) {
+      if (!this.pdfChunks.has(name)) {
         this.pdfFileNames = [...this.pdfFileNames, name];
       }
-      this.pdfTextContents.set(name, text);
+      const chunks = this.splitTextIntoChunks(text);
+      this.pdfChunks.set(name, chunks);
+      console.log(`PDF "${name}" split into ${chunks.length} chunks`);
     }
 
     // FIX: Cast this to any to call requestUpdate as TS is failing to see it on LitElement.
@@ -906,13 +926,13 @@ export class GdmLiveAudio extends LitElement {
     this.pdfFileNames = this.pdfFileNames.filter(
       (name) => name !== fileNameToRemove,
     );
-    this.pdfTextContents.delete(fileNameToRemove);
+    this.pdfChunks.delete(fileNameToRemove);
     this.reset();
   }
 
   private clearAllPdfs() {
     this.pdfFileNames = [];
-    this.pdfTextContents.clear();
+    this.pdfChunks.clear();
     this.reset();
   }
 
