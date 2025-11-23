@@ -40,10 +40,15 @@ QDRANT_API_KEY=your_qdrant_api_key
 
 ### With Qdrant (RAG Mode)
 - PDFs are split into chunks and stored in Qdrant vector database
-- Each chunk is embedded using Google's `text-embedding-004` model
-- When you ask questions, semantic search finds the most relevant chunks
+- Each chunk is embedded using Google's `text-embedding-004` model (768 dimensions)
+- **Real-time semantic search**: When you ask a question, the system:
+  1. Captures your speech transcription
+  2. Performs semantic search in Qdrant to find the 5 most relevant chunks
+  3. Automatically sends these chunks as context to the AI
+  4. The AI answers based only on the retrieved relevant excerpts
 - Only relevant context is provided to the AI, improving accuracy and reducing token usage
 - The collection name is `RAG_Sonido`
+- Visual indicator shows Qdrant connection status in the top-left corner
 
 ## Installation
 
@@ -85,6 +90,22 @@ npm run build
 - **Vector Size**: 768 dimensions
 - **Distance Metric**: Cosine similarity
 - **Embedding Model**: `text-embedding-004` (Google)
+
+### Real-Time RAG Workflow
+When Qdrant is enabled, the system performs intelligent context retrieval:
+
+1. **User speaks**: Your question is transcribed in real-time
+2. **Turn completion**: When you finish speaking, the system detects the complete transcription
+3. **Semantic search**: The transcription is embedded and used to search Qdrant for the 5 most relevant chunks
+4. **Context injection**: Relevant excerpts are automatically sent to the AI with relevance scores
+5. **AI response**: The model answers based exclusively on the retrieved context
+6. **Citation**: The AI cites which document excerpts it used
+
+This approach ensures:
+- ✅ **Accuracy**: Only relevant information is considered
+- ✅ **Efficiency**: Minimal token usage compared to sending all documents
+- ✅ **Scalability**: Works with thousands of document chunks
+- ✅ **Transparency**: You can see relevance scores in the console logs
 
 ### Supported Features
 - Multiple PDF upload

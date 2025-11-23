@@ -79,6 +79,30 @@ export class GdmLiveAudio extends LitElement {
       font-family: sans-serif;
     }
 
+    #qdrant-status {
+      position: absolute;
+      top: 20px;
+      left: 20px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.6);
+      color: white;
+      font-family: sans-serif;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.2);
+    }
+
+    #qdrant-status.connected {
+      border-color: rgba(76, 175, 80, 0.6);
+      background: rgba(76, 175, 80, 0.2);
+    }
+
+    #qdrant-status.error {
+      border-color: rgba(244, 67, 54, 0.6);
+      background: rgba(244, 67, 54, 0.2);
+    }
+
     #captions {
       position: absolute;
       bottom: 25vh;
@@ -486,9 +510,16 @@ export class GdmLiveAudio extends LitElement {
       const totalChunks = Array.from(this.pdfChunks.values()).reduce((sum, chunks) => sum + chunks.length, 0);
       const fileNames = Array.from(this.pdfChunks.keys()).join(', ');
 
-      systemInstructionText = `You are a helpful assistant with access to ${totalChunks} chunks from ${this.pdfChunks.size} PDF document(s): ${fileNames}. 
+      systemInstructionText = `You are a helpful assistant with access to a vector database containing ${totalChunks} chunks from ${this.pdfChunks.size} PDF document(s): ${fileNames}.
 
-When answering questions, you will receive relevant excerpts from these documents based on semantic search. Answer questions based exclusively on the provided context. If the answer is not in the provided context, say that you cannot find the information in the available documents.`;
+IMPORTANT: When a user asks a question, you will automatically receive relevant excerpts from these documents through semantic search. These excerpts will be provided to you in the format:
+
+--- RELEVANT DOCUMENT EXCERPTS ---
+[Excerpt N from "filename" (relevance: X%)]
+<text content>
+--- END OF EXCERPTS ---
+
+Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don't contain the answer, clearly state that you cannot find the information in the available documents. Always cite which document excerpt you're using when answering.`;
 
       this.updateStatus(`🔍 Qdrant RAG mode: ${totalChunks} chunks indexed`);
     } else if (this.pdfChunks.size > 0) {
@@ -575,6 +606,39 @@ When answering questions, you will receive relevant excerpts from these document
 
               if (serverContent.turnComplete) {
                 if (this.currentInputTranscription.trim()) {
+                  // Perform semantic search in Qdrant if available
+                  if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0) {
+                    try {
+                      const query = this.currentInputTranscription.trim();
+                      console.log(`Searching Qdrant for: "${query}"`);
+
+                      const relevantChunks = await this.qdrantService.searchRelevantChunks(query, 5);
+
+                      if (relevantChunks.length > 0) {
+                        console.log(`Found ${relevantChunks.length} relevant chunks`);
+
+                        // Build context from relevant chunks
+                        let contextText = '\n\n--- RELEVANT DOCUMENT EXCERPTS ---\n\n';
+                        relevantChunks.forEach((chunk, idx) => {
+                          contextText += `[Excerpt ${idx + 1} from "${chunk.fileName}" (relevance: ${(chunk.score * 100).toFixed(1)}%)]\n${chunk.text}\n\n`;
+                        });
+                        contextText += '--- END OF EXCERPTS ---\n\n';
+
+                        // Send the context to the model as a text message
+                        if (this.session) {
+                          this.session.sendRealtimeInput({
+                            text: contextText,
+                          });
+                          console.log('Sent relevant context to model');
+                        }
+                      } else {
+                        console.log('No relevant chunks found');
+                      }
+                    } catch (error) {
+                      console.error('Error performing semantic search:', error);
+                    }
+                  }
+
                   this.transcriptionHistory = [
                     ...this.transcriptionHistory,
                     {
@@ -1018,6 +1082,13 @@ When answering questions, you will receive relevant excerpts from these document
   render() {
     return html`
       <div>
+        ${this.qdrantStatus
+        ? html`<div
+              id="qdrant-status"
+              class="${this.useQdrant ? 'connected' : this.qdrantStatus.includes('failed') ? 'error' : ''}">
+              ${this.qdrantStatus}
+            </div>`
+        : ''}
         <video
           id="webcam"
           class=${this.isSharingScreen ? 'screenshare' : ''}
@@ -1026,30 +1097,30 @@ When answering questions, you will receive relevant excerpts from these document
           playsinline></video>
         <div id="captions">
           ${this.transcriptionHistory.map(
-      (item) =>
-        html`
+          (item) =>
+            html`
                 <div class="caption-item">
                   <p class="${item.speaker}">
                     <b>${item.speaker === 'user' ? 'You' : 'AI'}:</b> ${item.text}
                   </p>
                   ${item.sources && item.sources.length > 0
-            ? html`
+                ? html`
                         <div class="source-chips">
                           ${item.sources.map(
-              (source) =>
-                html`<a
+                  (source) =>
+                    html`<a
                                 class="source-chip"
                                 href="${source.uri}"
                                 target="_blank"
                                 >${source.title || 'Source'}</a
                               >`,
-            )}
+                )}
                         </div>
                       `
-            : ''}
+                : ''}
                 </div>
               `,
-    )}
+        )}
           ${this.currentInputTranscription
         ? html`<p class="user current">
                 <b>You:</b> ${this.currentInputTranscription}
