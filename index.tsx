@@ -10,6 +10,7 @@ import { customElement, query, state } from 'lit/decorators.js';
 import * as pdfjsLib from 'pdfjs-dist';
 import { createBlob, decode, decodeAudioData } from './utils';
 import './visual-3d';
+import { QdrantService, ChunkWithMetadata } from './qdrant-service';
 
 @customElement('gdm-live-audio')
 export class GdmLiveAudio extends LitElement {
@@ -57,6 +58,9 @@ export class GdmLiveAudio extends LitElement {
   private videoElement: HTMLVideoElement;
   private videoCanvas: HTMLCanvasElement;
   private videoFrameInterval: number;
+  private qdrantService: QdrantService | null = null;
+  @state() useQdrant = false;
+  @state() qdrantStatus = '';
 
   private readonly languages = [
     { code: 'en-US', name: 'English (US)' },
@@ -416,6 +420,30 @@ export class GdmLiveAudio extends LitElement {
     pdfjsLib.GlobalWorkerOptions.workerSrc = `https://esm.sh/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.mjs`;
     this.initClient();
     this.videoCanvas = document.createElement('canvas');
+    this.initQdrant();
+  }
+
+  private async initQdrant() {
+    const qdrantUrl = process.env.QDRANT_URL;
+    const qdrantApiKey = process.env.QDRANT_API_KEY;
+    const apiKey = process.env.API_KEY;
+
+    if (qdrantUrl && qdrantApiKey && apiKey) {
+      try {
+        this.qdrantService = new QdrantService(qdrantUrl, qdrantApiKey, apiKey);
+        await this.qdrantService.initializeCollection();
+        this.useQdrant = true;
+        this.qdrantStatus = '✅ Qdrant connected';
+        console.log('Qdrant service initialized successfully');
+      } catch (error) {
+        console.error('Failed to initialize Qdrant:', error);
+        this.qdrantStatus = '❌ Qdrant connection failed';
+        this.useQdrant = false;
+      }
+    } else {
+      console.log('Qdrant credentials not found, using in-memory chunks');
+      this.qdrantStatus = 'Using in-memory storage';
+    }
   }
 
   protected firstUpdated(): void {
@@ -451,9 +479,21 @@ export class GdmLiveAudio extends LitElement {
     const model = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
     let combinedPdfText = '';
-    let totalChunksIncluded = 0;
+    let systemInstructionText = '';
 
-    if (this.pdfChunks.size > 0) {
+    if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0) {
+      // When using Qdrant, we'll do semantic search on user queries
+      const totalChunks = Array.from(this.pdfChunks.values()).reduce((sum, chunks) => sum + chunks.length, 0);
+      const fileNames = Array.from(this.pdfChunks.keys()).join(', ');
+
+      systemInstructionText = `You are a helpful assistant with access to ${totalChunks} chunks from ${this.pdfChunks.size} PDF document(s): ${fileNames}. 
+
+When answering questions, you will receive relevant excerpts from these documents based on semantic search. Answer questions based exclusively on the provided context. If the answer is not in the provided context, say that you cannot find the information in the available documents.`;
+
+      this.updateStatus(`🔍 Qdrant RAG mode: ${totalChunks} chunks indexed`);
+    } else if (this.pdfChunks.size > 0) {
+      // Fallback to in-memory chunks
+      let totalChunksIncluded = 0;
       let docIndex = 1;
 
       for (const [fileName, chunks] of this.pdfChunks.entries()) {
@@ -486,11 +526,11 @@ export class GdmLiveAudio extends LitElement {
       } else {
         this.updateStatus(`📄 Loaded ${totalChunks} chunks from ${this.pdfChunks.size} PDF(s)`);
       }
+
+      systemInstructionText = `You are a helpful assistant. Please answer the user's questions based exclusively on the content of the following documents. The documents have been split into chunks for processing. If the answer is not in the provided chunks, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`;
     }
 
-    const systemInstruction = combinedPdfText
-      ? `You are a helpful assistant. Please answer the user's questions based exclusively on the content of the following documents. The documents have been split into chunks for processing. If the answer is not in the provided chunks, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`
-      : undefined;
+    const systemInstruction = systemInstructionText || undefined;
 
     // Prepare tools configuration
     const tools: Tool[] = [];
@@ -910,6 +950,23 @@ export class GdmLiveAudio extends LitElement {
       const chunks = this.splitTextIntoChunks(text);
       this.pdfChunks.set(name, chunks);
       console.log(`PDF "${name}" split into ${chunks.length} chunks`);
+
+      // Store in Qdrant if available
+      if (this.useQdrant && this.qdrantService) {
+        try {
+          this.updateStatus(`Storing "${name}" in Qdrant...`);
+          const chunksWithMetadata: ChunkWithMetadata[] = chunks.map(chunk => ({
+            ...chunk,
+            fileName: name,
+            totalChunks: chunks.length,
+          }));
+          await this.qdrantService.storeChunks(chunksWithMetadata);
+          this.updateStatus(`✅ "${name}" stored in Qdrant`);
+        } catch (error) {
+          console.error(`Failed to store "${name}" in Qdrant:`, error);
+          this.updateError(`Failed to store "${name}" in Qdrant`);
+        }
+      }
     }
 
     // FIX: Cast this to any to call requestUpdate as TS is failing to see it on LitElement.
@@ -922,17 +979,39 @@ export class GdmLiveAudio extends LitElement {
     input.value = '';
   }
 
-  private removePdf(fileNameToRemove: string) {
+  private async removePdf(fileNameToRemove: string) {
     this.pdfFileNames = this.pdfFileNames.filter(
       (name) => name !== fileNameToRemove,
     );
     this.pdfChunks.delete(fileNameToRemove);
+
+    // Remove from Qdrant if available
+    if (this.useQdrant && this.qdrantService) {
+      try {
+        await this.qdrantService.deleteFileChunks(fileNameToRemove);
+        console.log(`Removed "${fileNameToRemove}" from Qdrant`);
+      } catch (error) {
+        console.error(`Failed to remove "${fileNameToRemove}" from Qdrant:`, error);
+      }
+    }
+
     this.reset();
   }
 
-  private clearAllPdfs() {
+  private async clearAllPdfs() {
     this.pdfFileNames = [];
     this.pdfChunks.clear();
+
+    // Clear Qdrant collection if available
+    if (this.useQdrant && this.qdrantService) {
+      try {
+        await this.qdrantService.clearCollection();
+        console.log('Cleared all PDFs from Qdrant');
+      } catch (error) {
+        console.error('Failed to clear Qdrant collection:', error);
+      }
+    }
+
     this.reset();
   }
 
