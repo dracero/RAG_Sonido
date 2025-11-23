@@ -4,11 +4,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import {GoogleGenAI, LiveServerMessage, Modality, Session, Tool} from '@google/genai';
-import {LitElement, css, html} from 'lit';
-import {customElement, query, state} from 'lit/decorators.js';
+import { GoogleGenAI, LiveServerMessage, Modality, Session, Tool } from '@google/genai';
+import { LitElement, css, html } from 'lit';
+import { customElement, query, state } from 'lit/decorators.js';
 import * as pdfjsLib from 'pdfjs-dist';
-import {createBlob, decode, decodeAudioData} from './utils';
+import { createBlob, decode, decodeAudioData } from './utils';
 import './visual-3d';
 
 @customElement('gdm-live-audio')
@@ -24,21 +24,25 @@ export class GdmLiveAudio extends LitElement {
   @state() transcriptionHistory: Array<{
     speaker: 'user' | 'model';
     text: string;
-    sources?: Array<{uri: string; title: string}>;
+    sources?: Array<{ uri: string; title: string }>;
   }> = [];
   @state() pdfFileNames: string[] = [];
   @state() isProcessingPdf = false;
 
   @query('#captions') private captionsContainer: HTMLDivElement;
 
+  // PDF text limits to prevent API errors
+  private readonly MAX_CHARS_PER_PDF = 50000; // ~50k characters per PDF
+  private readonly MAX_TOTAL_CHARS = 150000; // ~150k total characters for all PDFs
+
   private client: GoogleGenAI;
   private session: Session | null = null;
   // FIX: Cast window to any to allow for webkitAudioContext fallback.
   private inputAudioContext = new ((window as any).AudioContext ||
-    (window as any).webkitAudioContext)({sampleRate: 16000});
+    (window as any).webkitAudioContext)({ sampleRate: 16000 });
   // FIX: Cast window to any to allow for webkitAudioContext fallback.
   private outputAudioContext = new ((window as any).AudioContext ||
-    (window as any).webkitAudioContext)({sampleRate: 24000});
+    (window as any).webkitAudioContext)({ sampleRate: 24000 });
   @state() inputNode = this.inputAudioContext.createGain();
   @state() outputNode = this.outputAudioContext.createGain();
   private nextStartTime = 0;
@@ -54,8 +58,8 @@ export class GdmLiveAudio extends LitElement {
   private videoFrameInterval: number;
 
   private readonly languages = [
-    {code: 'en-US', name: 'English (US)'},
-    {code: 'en-GB', name: 'English (UK)'},
+    { code: 'en-US', name: 'English (US)' },
+    { code: 'en-GB', name: 'English (UK)' },
   ];
 
   static styles = css`
@@ -446,11 +450,40 @@ export class GdmLiveAudio extends LitElement {
     const model = 'gemini-2.5-flash-native-audio-preview-09-2025';
 
     let combinedPdfText = '';
+    let totalChars = 0;
+    let truncatedFiles: string[] = [];
+
     if (this.pdfTextContents.size > 0) {
       let docIndex = 1;
       for (const [fileName, text] of this.pdfTextContents.entries()) {
-        combinedPdfText += `--- START OF DOCUMENT ${docIndex}: ${fileName} ---\n\n${text}\n\n--- END OF DOCUMENT ${docIndex} ---\n\n`;
+        // Truncate individual PDF if too large
+        let processedText = text;
+        if (text.length > this.MAX_CHARS_PER_PDF) {
+          processedText = text.substring(0, this.MAX_CHARS_PER_PDF);
+          truncatedFiles.push(fileName);
+        }
+
+        // Check if adding this document would exceed total limit
+        if (totalChars + processedText.length > this.MAX_TOTAL_CHARS) {
+          const remainingSpace = this.MAX_TOTAL_CHARS - totalChars;
+          if (remainingSpace > 1000) { // Only include if we have at least 1000 chars space
+            processedText = processedText.substring(0, remainingSpace);
+            truncatedFiles.push(fileName);
+          } else {
+            // Skip this document entirely
+            continue;
+          }
+        }
+
+        combinedPdfText += `--- START OF DOCUMENT ${docIndex}: ${fileName} ---\n\n${processedText}\n\n--- END OF DOCUMENT ${docIndex} ---\n\n`;
+        totalChars += processedText.length;
         docIndex++;
+      }
+
+      // Warn user if files were truncated
+      if (truncatedFiles.length > 0) {
+        console.warn(`The following PDFs were truncated due to size limits: ${truncatedFiles.join(', ')}`);
+        this.updateStatus(`⚠️ Some PDFs were truncated due to size limits: ${truncatedFiles.join(', ')}`);
       }
     }
 
@@ -461,7 +494,7 @@ export class GdmLiveAudio extends LitElement {
     // Prepare tools configuration
     const tools: Tool[] = [];
     if (this.isGoogleSearchEnabled) {
-      tools.push({googleSearch: {}});
+      tools.push({ googleSearch: {} });
     }
 
     try {
@@ -485,8 +518,8 @@ export class GdmLiveAudio extends LitElement {
               // Check for Grounding Metadata (Search results)
               // Cast to any to access metadata that might be attached to the modelTurn
               const modelTurn = serverContent.modelTurn as any;
-              let currentSources: Array<{uri: string; title: string}> = [];
-              
+              let currentSources: Array<{ uri: string; title: string }> = [];
+
               if (modelTurn?.groundingMetadata?.groundingChunks) {
                 const chunks = modelTurn.groundingMetadata.groundingChunks;
                 chunks.forEach((chunk: any) => {
@@ -605,7 +638,7 @@ export class GdmLiveAudio extends LitElement {
     try {
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
-        video: {width: {ideal: 640}, height: {ideal: 480}},
+        video: { width: { ideal: 640 }, height: { ideal: 480 } },
       });
 
       this.videoElement.srcObject = this.mediaStream;
@@ -633,7 +666,7 @@ export class GdmLiveAudio extends LitElement {
         const inputBuffer = audioProcessingEvent.inputBuffer;
         const pcmData = inputBuffer.getChannelData(0);
 
-        this.session.sendRealtimeInput({media: createBlob(pcmData)});
+        this.session.sendRealtimeInput({ media: createBlob(pcmData) });
       };
 
       this.sourceNode.connect(this.scriptProcessorNode);
@@ -735,8 +768,8 @@ export class GdmLiveAudio extends LitElement {
     try {
       this.screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
-          width: {ideal: 1280},
-          height: {ideal: 720},
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
         },
         audio: false,
       });
@@ -834,14 +867,21 @@ export class GdmLiveAudio extends LitElement {
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      this.updateStatus(`Processing PDF ${i + 1}/${files.length}: ${file.name}`);
+      const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      this.updateStatus(`Processing PDF ${i + 1}/${files.length}: ${file.name} (${fileSizeMB} MB)`);
 
       try {
         const text = await this.processSinglePdf(file);
+
+        // Inform user if the extracted text is very large
+        if (text.length > this.MAX_CHARS_PER_PDF) {
+          console.warn(`PDF "${file.name}" extracted ${text.length} characters, will be truncated to ${this.MAX_CHARS_PER_PDF}`);
+        }
+
         newContents.set(file.name, text);
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
-        this.updateError(`Failed to process ${file.name}.`);
+        this.updateError(`Failed to process ${file.name}: ${err.message}`);
       }
     }
 
@@ -887,40 +927,40 @@ export class GdmLiveAudio extends LitElement {
           playsinline></video>
         <div id="captions">
           ${this.transcriptionHistory.map(
-            (item) =>
-              html`
+      (item) =>
+        html`
                 <div class="caption-item">
                   <p class="${item.speaker}">
                     <b>${item.speaker === 'user' ? 'You' : 'AI'}:</b> ${item.text}
                   </p>
                   ${item.sources && item.sources.length > 0
-                    ? html`
+            ? html`
                         <div class="source-chips">
                           ${item.sources.map(
-                            (source) =>
-                              html`<a
+              (source) =>
+                html`<a
                                 class="source-chip"
                                 href="${source.uri}"
                                 target="_blank"
                                 >${source.title || 'Source'}</a
                               >`,
-                          )}
+            )}
                         </div>
                       `
-                    : ''}
+            : ''}
                 </div>
               `,
-          )}
+    )}
           ${this.currentInputTranscription
-            ? html`<p class="user current">
+        ? html`<p class="user current">
                 <b>You:</b> ${this.currentInputTranscription}
               </p>`
-            : ''}
+        : ''}
           ${this.currentOutputTranscription
-            ? html`<p class="model current">
+        ? html`<p class="model current">
                 <b>AI:</b> ${this.currentOutputTranscription}
               </p>`
-            : ''}
+        : ''}
         </div>
         <div class="controls">
           <div class="settings">
@@ -931,9 +971,9 @@ export class GdmLiveAudio extends LitElement {
               .value=${this.selectedLanguage}
               ?disabled=${this.isRecording || this.isProcessingPdf}>
               ${this.languages.map(
-                (lang) =>
-                  html`<option .value=${lang.code}>${lang.name}</option>`,
-              )}
+          (lang) =>
+            html`<option .value=${lang.code}>${lang.name}</option>`,
+        )}
             </select>
 
             <div class="toggle-container">
@@ -974,10 +1014,10 @@ export class GdmLiveAudio extends LitElement {
               style="display:none"
               ?disabled=${this.isRecording || this.isProcessingPdf} />
             ${this.pdfFileNames.length > 0
-              ? html`
+        ? html`
                   <div class="pdf-file-list">
                     ${this.pdfFileNames.map(
-                      (name) => html`
+          (name) => html`
                         <div class="pdf-file-item">
                           <span class="pdf-file-name" title=${name}
                             >${name}</span
@@ -999,7 +1039,7 @@ export class GdmLiveAudio extends LitElement {
                           </button>
                         </div>
                       `,
-                    )}
+        )}
                     <button
                       class="clear-all-pdfs-button"
                       @click=${this.clearAllPdfs}
@@ -1009,7 +1049,7 @@ export class GdmLiveAudio extends LitElement {
                     </button>
                   </div>
                 `
-              : ''}
+        : ''}
           </div>
           <div class="buttons">
             <button
@@ -1043,9 +1083,8 @@ export class GdmLiveAudio extends LitElement {
               id="screenShareButton"
               @click=${this.toggleScreenShare}
               ?disabled=${!this.isRecording}
-              title=${
-                this.isSharingScreen ? 'Stop screen sharing' : 'Share screen'
-              }>
+              title=${this.isSharingScreen ? 'Stop screen sharing' : 'Share screen'
+      }>
               <svg
                 xmlns="http://www.w3.org/2000/svg"
                 height="40px"
