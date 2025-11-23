@@ -741,6 +741,11 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
     this.updateStatus('Requesting microphone and camera access...');
 
     try {
+      // Check if navigator.mediaDevices is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error('Media Devices API is not supported in this browser or context. Please ensure you are using HTTPS or localhost.');
+      }
+
       this.mediaStream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: { width: { ideal: 640 }, height: { ideal: 480 } },
@@ -871,6 +876,11 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
   private async startScreenShare() {
     this.updateStatus('Requesting screen sharing access...');
     try {
+      // Check if navigator.mediaDevices is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+        throw new Error('Screen Capture API is not supported in this browser or context. Please ensure you are using HTTPS or localhost.');
+      }
+
       this.screenStream = await navigator.mediaDevices.getDisplayMedia({
         video: {
           width: { ideal: 1280 },
