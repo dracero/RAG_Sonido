@@ -1014,22 +1014,33 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
       const chunks = this.splitTextIntoChunks(text);
       this.pdfChunks.set(name, chunks);
       console.log(`PDF "${name}" split into ${chunks.length} chunks`);
+    }
 
-      // Store in Qdrant if available
-      if (this.useQdrant && this.qdrantService) {
-        try {
-          this.updateStatus(`Storing "${name}" in Qdrant...`);
+    // If using Qdrant, clear the collection and re-upload ALL PDFs
+    if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0) {
+      try {
+        this.updateStatus('🔄 Clearing Qdrant collection...');
+        await this.qdrantService.clearCollection();
+        console.log('Qdrant collection cleared');
+
+        // Re-upload all PDFs (existing + new)
+        let totalChunksStored = 0;
+        for (const [name, chunks] of this.pdfChunks.entries()) {
+          this.updateStatus(`Storing "${name}" in Qdrant (${totalChunksStored} chunks stored)...`);
           const chunksWithMetadata: ChunkWithMetadata[] = chunks.map(chunk => ({
             ...chunk,
             fileName: name,
             totalChunks: chunks.length,
           }));
           await this.qdrantService.storeChunks(chunksWithMetadata);
-          this.updateStatus(`✅ "${name}" stored in Qdrant`);
-        } catch (error) {
-          console.error(`Failed to store "${name}" in Qdrant:`, error);
-          this.updateError(`Failed to store "${name}" in Qdrant`);
+          totalChunksStored += chunks.length;
+          console.log(`Stored "${name}" (${chunks.length} chunks) in Qdrant`);
         }
+
+        this.updateStatus(`✅ All PDFs stored in Qdrant (${totalChunksStored} total chunks)`);
+      } catch (error) {
+        console.error('Failed to update Qdrant collection:', error);
+        this.updateError('Failed to update Qdrant collection');
       }
     }
 

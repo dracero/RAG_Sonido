@@ -73,9 +73,14 @@ npm run build
 1. **Start the application** and grant microphone/camera permissions
 2. **Upload PDFs** using the upload button
    - Files are automatically processed and chunked
-   - If Qdrant is configured, chunks are stored in the vector database
+   - If Qdrant is configured:
+     - The collection is cleared
+     - All PDFs (existing + new) are re-uploaded to ensure synchronization
+     - You'll see progress updates showing chunks being stored
 3. **Start recording** to begin the conversation
 4. **Ask questions** about your uploaded documents
+   - The system automatically searches for relevant chunks
+   - Only the most relevant context is sent to the AI
 5. **Optional**: Enable Google Search for web-based queries
 
 ## Technical Details
@@ -113,6 +118,7 @@ This approach ensures:
 - Clear all PDFs
 - Real-time status updates
 - Error handling and recovery
+- **Qdrant synchronization**: When uploading new PDFs, the entire Qdrant collection is cleared and recreated with all PDFs to ensure perfect synchronization between the UI and the vector database
 
 ## Troubleshooting
 
