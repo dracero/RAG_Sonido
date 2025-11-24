@@ -42,7 +42,8 @@ export class QdrantService {
      */
     private getUrl(path: string): string {
         // If we are using the Vercel proxy (URL contains /api/qdrant), switch to simple proxy
-        if (this.debugUrl.includes('/api/qdrant')) {
+        // BUT only in production (on Vercel). Locally we use Vite proxy at /api/qdrant
+        if (this.debugUrl.includes('/api/qdrant') && !import.meta.env.DEV) {
             const baseUrl = this.debugUrl.replace('/api/qdrant', '/api/proxy');
             // Ensure path doesn't start with /
             const cleanPath = path.startsWith('/') ? path.substring(1) : path;
