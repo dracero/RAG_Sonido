@@ -454,7 +454,22 @@ export class GdmLiveAudio extends LitElement {
 
     if (qdrantUrl && qdrantApiKey && apiKey) {
       try {
-        this.qdrantService = new QdrantService(qdrantUrl, qdrantApiKey, apiKey);
+        console.log('Raw Qdrant URL:', qdrantUrl);
+        // If using proxy (relative path), prepend origin to make it a valid URL for QdrantClient
+        // IMPORTANT: Must end with / so that QdrantClient appends paths correctly (e.g. /collections)
+        // otherwise http://host/api/qdrant + collections -> http://host/collections
+        let finalQdrantUrl = qdrantUrl.startsWith('/')
+          ? `${window.location.origin}${qdrantUrl}`
+          : qdrantUrl;
+
+        if (!finalQdrantUrl.endsWith('/')) {
+          finalQdrantUrl += '/';
+        }
+
+        console.log('Final Qdrant URL:', finalQdrantUrl);
+        console.log('Qdrant API Key present:', !!qdrantApiKey, qdrantApiKey ? `(Length: ${qdrantApiKey.length})` : '');
+
+        this.qdrantService = new QdrantService(finalQdrantUrl, qdrantApiKey, apiKey);
         await this.qdrantService.initializeCollection();
         this.useQdrant = true;
         this.qdrantStatus = '✅ Qdrant connected';
@@ -1029,6 +1044,7 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
     // If using Qdrant, clear the collection and re-upload ALL PDFs
     if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0) {
       try {
+        console.log('Starting Qdrant update process...');
         this.updateStatus('🔄 Clearing Qdrant collection...');
         await this.qdrantService.clearCollection();
         console.log('Qdrant collection cleared');
@@ -1036,12 +1052,15 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
         // Re-upload all PDFs (existing + new)
         let totalChunksStored = 0;
         for (const [name, chunks] of this.pdfChunks.entries()) {
+          console.log(`Preparing to store "${name}" with ${chunks.length} chunks`);
           this.updateStatus(`Storing "${name}" in Qdrant (${totalChunksStored} chunks stored)...`);
           const chunksWithMetadata: ChunkWithMetadata[] = chunks.map(chunk => ({
             ...chunk,
             fileName: name,
             totalChunks: chunks.length,
           }));
+
+          console.log(`Calling storeChunks for "${name}"...`);
           await this.qdrantService.storeChunks(chunksWithMetadata);
           totalChunksStored += chunks.length;
           console.log(`Stored "${name}" (${chunks.length} chunks) in Qdrant`);
@@ -1050,8 +1069,14 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
         this.updateStatus(`✅ All PDFs stored in Qdrant (${totalChunksStored} total chunks)`);
       } catch (error) {
         console.error('Failed to update Qdrant collection:', error);
-        this.updateError('Failed to update Qdrant collection');
+        this.updateError(`Failed to update Qdrant collection: ${error.message}`);
       }
+    } else {
+      console.log('Skipping Qdrant update:', {
+        useQdrant: this.useQdrant,
+        hasService: !!this.qdrantService,
+        chunksSize: this.pdfChunks.size
+      });
     }
 
     // FIX: Cast this to any to call requestUpdate as TS is failing to see it on LitElement.

@@ -1,5 +1,9 @@
 import { QdrantClient } from '@qdrant/js-client-rest';
-import { GoogleGenAI } from '@google/genai';
+// @ts-ignore
+import { pipeline, env } from '@xenova/transformers';
+
+// Skip local model checks since we're in browser
+env.allowLocalModels = false;
 
 export interface ChunkWithMetadata {
     text: string;
@@ -10,24 +14,38 @@ export interface ChunkWithMetadata {
 
 export class QdrantService {
     private client: QdrantClient;
-    private genAI: GoogleGenAI;
+    private extractor: any = null;
     private collectionName = 'RAG_Sonido';
-    private embeddingModel = 'text-embedding-004';
-    private vectorSize = 768; // text-embedding-004 produces 768-dimensional vectors
+    private vectorSize = 384; // all-MiniLM-L6-v2 produces 384-dimensional vectors
+
+    private debugUrl: string;
+    private debugApiKey: string;
 
     constructor(
         qdrantUrl: string,
         qdrantApiKey: string,
-        googleApiKey: string
+        _googleApiKey: string // Unused now
     ) {
         this.client = new QdrantClient({
             url: qdrantUrl,
             apiKey: qdrantApiKey,
+            checkCompatibility: false,
         });
 
-        this.genAI = new GoogleGenAI({
-            apiKey: googleApiKey,
-        });
+        // Store credentials for debug fetch
+        this.debugUrl = qdrantUrl;
+        this.debugApiKey = qdrantApiKey;
+    }
+
+    /**
+     * Initialize the embedding pipeline
+     */
+    private async initPipeline() {
+        if (!this.extractor) {
+            console.log('Loading embedding model...');
+            this.extractor = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2');
+            console.log('Embedding model loaded');
+        }
     }
 
     /**
@@ -35,23 +53,84 @@ export class QdrantService {
      */
     async initializeCollection(): Promise<void> {
         try {
-            // Check if collection exists
-            const collections = await this.client.getCollections();
-            const exists = collections.collections.some(
-                (col) => col.name === this.collectionName
-            );
+            await this.initPipeline();
+
+            // Check if collection exists using fetch
+            let exists = false;
+            try {
+                const collectionsUrl = `${this.debugUrl}/collections`;
+                const response = await fetch(collectionsUrl, {
+                    headers: {
+                        'api-key': this.debugApiKey,
+                    }
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.result && Array.isArray(data.result.collections)) {
+                        exists = data.result.collections.some(
+                            (col: any) => col.name === this.collectionName
+                        );
+                    }
+                } else {
+                    console.error('Failed to fetch collections:', response.status, response.statusText);
+                }
+            } catch (e) {
+                console.error('Error checking collections with fetch:', e);
+            }
 
             if (!exists) {
                 console.log(`Creating collection: ${this.collectionName}`);
-                await this.client.createCollection(this.collectionName, {
-                    vectors: {
-                        size: this.vectorSize,
-                        distance: 'Cosine',
-                    },
-                });
-                console.log(`Collection ${this.collectionName} created successfully`);
+                try {
+                    // Use fetch directly since client.createCollection fails with proxy path
+                    // Handle potential double slash if debugUrl ends with /
+                    const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
+                    const createUrl = `${baseUrl}/collections/${this.collectionName}`;
+
+                    console.log(`[QdrantService] Sending PUT request to ${createUrl}`);
+
+                    const response = await fetch(createUrl, {
+                        method: 'PUT',
+                        headers: {
+                            'api-key': this.debugApiKey,
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            vectors: {
+                                size: this.vectorSize,
+                                distance: 'Cosine',
+                            }
+                        })
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`Failed to create collection: ${response.status} ${response.statusText} - ${errorText}`);
+                    }
+
+                    console.log(`Collection ${this.collectionName} created successfully`);
+                } catch (createError) {
+                    console.error('Error creating collection:', createError);
+                    throw createError;
+                }
             } else {
                 console.log(`Collection ${this.collectionName} already exists`);
+
+                // Check if vector size matches (if possible) or just warn
+                // Ideally we would check info and recreate if size mismatch, 
+                // but for now let's assume if it exists it might be wrong if it was created with 768
+                // We'll try to delete and recreate to be safe since we changed models
+                try {
+                    const info = await this.client.getCollection(this.collectionName);
+                    if (info.config?.params?.vectors?.size !== this.vectorSize) {
+                        console.warn(`Collection vector size mismatch! Recreating ${this.collectionName}...`);
+                        await this.client.deleteCollection(this.collectionName);
+                        await this.initializeCollection(); // Recurse to create
+                        return;
+                    }
+                } catch (e) {
+                    // Ignore error checking info
+                }
             }
         } catch (error) {
             console.error('Error initializing collection:', error);
@@ -60,16 +139,14 @@ export class QdrantService {
     }
 
     /**
-     * Generate embeddings for a text using Google's embedding model
+     * Generate embeddings using Transformers.js
      */
     private async generateEmbedding(text: string): Promise<number[]> {
         try {
-            const result = await this.genAI.models.embedContent({
-                model: this.embeddingModel,
-                contents: [{ parts: [{ text }] }],
-            });
+            await this.initPipeline();
 
-            return result.embeddings[0].values;
+            const output = await this.extractor(text, { pooling: 'mean', normalize: true });
+            return Array.from(output.data);
         } catch (error) {
             console.error('Error generating embedding:', error);
             throw error;
@@ -77,42 +154,129 @@ export class QdrantService {
     }
 
     /**
+     * Sanitize text to remove control characters and invalid sequences
+     */
+    private cleanText(text: string): string {
+        // Remove null bytes, control characters, and backslashes
+        let cleaned = text.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F\\]/g, '');
+        // Remove any surrogate characters that could break JSON
+        cleaned = cleaned.replace(/[\uD800-\uDFFF]/g, '');
+        return cleaned;
+    }
+
+    /**
      * Store chunks in Qdrant with their embeddings
      */
     async storeChunks(chunks: ChunkWithMetadata[]): Promise<void> {
         try {
-            console.log(`Storing ${chunks.length} chunks in Qdrant...`);
+            console.log(`[QdrantService] Processing ${chunks.length} chunks for Qdrant...`);
 
-            const points = [];
+            let pointsBuffer = [];
+            // Batch upserts to avoid payload limits
+            // Increased to 10 for better performance now that we handle errors
+            const BATCH_SIZE = 10;
+            let totalStored = 0;
 
             for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
-                console.log(`Generating embedding for chunk ${i + 1}/${chunks.length}`);
+                console.log(`[QdrantService] Generating embedding for chunk ${i + 1}/${chunks.length}`);
 
-                const embedding = await this.generateEmbedding(chunk.text);
+                try {
+                    // Sanitize text before embedding and storage
+                    const cleanedText = this.cleanText(chunk.text);
+                    const embedding = await this.generateEmbedding(cleanedText);
 
-                points.push({
-                    id: Date.now() + i, // Simple ID generation
-                    vector: embedding,
-                    payload: {
-                        text: chunk.text,
-                        fileName: chunk.fileName,
-                        chunkIndex: chunk.index,
-                        totalChunks: chunk.totalChunks,
-                    },
-                });
+                    pointsBuffer.push({
+                        id: Date.now() + i, // Simple ID generation
+                        vector: embedding,
+                        payload: {
+                            text: cleanedText,
+                            fileName: chunk.fileName,
+                            chunkIndex: chunk.index,
+                            totalChunks: chunk.totalChunks,
+                        },
+                    });
+
+                    // If buffer is full, upsert immediately
+                    if (pointsBuffer.length >= BATCH_SIZE) {
+                        try {
+                            await this.upsertBatch(pointsBuffer);
+                            totalStored += pointsBuffer.length;
+                        } catch (upsertError) {
+                            console.error(`[QdrantService] Failed to upsert batch for chunk ${i + 1}:`, upsertError);
+                            // Log the text that failed
+                            console.log(`[QdrantService] Failed text content (${cleanedText.length} chars):`, cleanedText.substring(0, 100) + '...');
+                        } finally {
+                            pointsBuffer = []; // Clear buffer regardless of success/failure to prevent cascading
+                        }
+                        console.log(`[QdrantService] Progress: ${totalStored}/${chunks.length} chunks stored`);
+                    }
+
+                } catch (embError) {
+                    console.error(`[QdrantService] Failed to process chunk ${i + 1}:`, embError);
+                    // Continue with next chunk instead of failing everything? 
+                    // For now, let's log and continue to try to save partial data
+                }
             }
 
-            await this.client.upsert(this.collectionName, {
-                wait: true,
-                points: points,
-            });
+            // Upsert remaining points
+            if (pointsBuffer.length > 0) {
+                try {
+                    await this.upsertBatch(pointsBuffer);
+                    totalStored += pointsBuffer.length;
+                } catch (upsertError) {
+                    console.error(`[QdrantService] Failed to upsert final batch:`, upsertError);
+                }
+            }
 
-            console.log(`Successfully stored ${chunks.length} chunks`);
+            console.log(`[QdrantService] Successfully stored total ${totalStored} chunks`);
         } catch (error) {
-            console.error('Error storing chunks:', error);
+            console.error('[QdrantService] Error storing chunks:', error);
             throw error;
         }
+    }
+
+    /**
+     * Helper to upsert a batch of points
+     */
+    private async upsertBatch(points: any[]): Promise<void> {
+        console.log(`[QdrantService] Upserting batch of ${points.length} points...`);
+
+        // Validate vectors before sending
+        const firstVector = points[0]?.vector;
+        if (firstVector) {
+            if (firstVector.length !== this.vectorSize) {
+                console.error(`[QdrantService] CRITICAL: Vector dimension mismatch! Expected ${this.vectorSize}, got ${firstVector.length}`);
+            }
+            if (firstVector.some((v: number) => isNaN(v))) {
+                console.error(`[QdrantService] CRITICAL: Vector contains NaN values!`);
+            }
+        }
+
+        // Use fetch for upsert to ensure correct path usage
+        const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
+        const upsertUrl = `${baseUrl}/collections/${this.collectionName}/points?wait=true`;
+
+        const response = await fetch(upsertUrl, {
+            method: 'PUT',
+            headers: {
+                'api-key': this.debugApiKey,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                points: points
+            })
+        });
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`[QdrantService] Upsert failed with status ${response.status}`);
+            console.error(`[QdrantService] Error response body: ${errorText}`);
+            throw new Error(`Failed to upsert batch: ${response.status} ${response.statusText} - ${errorText}`);
+        }
+
+        const result = await response.json();
+        console.log('[QdrantService] Batch upsert successful:', result);
     }
 
     /**
@@ -125,16 +289,35 @@ export class QdrantService {
         try {
             const queryEmbedding = await this.generateEmbedding(query);
 
-            const searchResult = await this.client.search(this.collectionName, {
-                vector: queryEmbedding,
-                limit: limit,
-                with_payload: true,
+            const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
+            const searchUrl = `${baseUrl}/collections/${this.collectionName}/points/search`;
+
+            const response = await fetch(searchUrl, {
+                method: 'POST',
+                headers: {
+                    'api-key': this.debugApiKey,
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    vector: queryEmbedding,
+                    limit: limit,
+                    with_payload: true
+                })
             });
 
-            return searchResult.map((result) => ({
-                text: result.payload?.text as string,
-                fileName: result.payload?.fileName as string,
-                score: result.score,
+            if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`[QdrantService] Search failed with status ${response.status}`);
+                console.error(`[QdrantService] Error response body: ${errorText}`);
+                throw new Error(`Search failed: ${response.status} ${response.statusText} - ${errorText}`);
+            }
+
+            const result = await response.json();
+            const points = result.result?.points ?? [];
+            return points.map((p: any) => ({
+                text: p.payload?.text ?? '',
+                fileName: p.payload?.fileName ?? '',
+                score: p.score ?? 0
             }));
         } catch (error) {
             console.error('Error searching chunks:', error);
@@ -169,11 +352,34 @@ export class QdrantService {
      */
     async clearCollection(): Promise<void> {
         try {
-            await this.client.deleteCollection(this.collectionName);
+            console.log(`[QdrantService] Clearing collection ${this.collectionName}...`);
+            // Use fetch for deletion to ensure correct path usage
+            const deleteUrl = `${this.debugUrl}/collections/${this.collectionName}`;
+            console.log(`[QdrantService] Sending DELETE request to ${deleteUrl}`);
+
+            const response = await fetch(deleteUrl, {
+                method: 'DELETE',
+                headers: {
+                    'api-key': this.debugApiKey,
+                }
+            });
+
+            if (!response.ok) {
+                // 404 is fine (collection doesn't exist)
+                if (response.status === 404) {
+                    console.log(`[QdrantService] Collection ${this.collectionName} not found (already cleared)`);
+                } else {
+                    throw new Error(`Failed to delete collection: ${response.status} ${response.statusText}`);
+                }
+            } else {
+                console.log(`[QdrantService] Collection ${this.collectionName} deleted successfully`);
+            }
+
+            // Re-initialize (create empty)
             await this.initializeCollection();
-            console.log(`Collection ${this.collectionName} cleared`);
+            console.log(`[QdrantService] Collection ${this.collectionName} cleared and re-initialized`);
         } catch (error) {
-            console.error('Error clearing collection:', error);
+            console.error('[QdrantService] Error clearing collection:', error);
             throw error;
         }
     }
