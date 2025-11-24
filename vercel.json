@@ -1,0 +1,13 @@
+{
+    "rewrites": [
+        {
+            "source": "/api/qdrant/:path*",
+            "destination": "/api/qdrant/[...path]"
+        }
+    ],
+    "env": {
+        "QDRANT_URL": "@qdrant_url",
+        "QDRANT_KEY": "@qdrant_key",
+        "GEMINI_API_KEY": "@gemini_api_key"
+    }
+}
