@@ -485,6 +485,53 @@ export class GdmLiveAudio extends LitElement {
     }
   }
 
+  /**
+   * Determine if the user query is asking about documents
+   * Returns true if the query appears to be document-related
+   */
+  private shouldSearchDocuments(query: string): boolean {
+    const lowerQuery = query.toLowerCase().trim();
+
+    // If query is too short, probably not a document question
+    if (lowerQuery.length < 3) {
+      return false;
+    }
+
+    // Keywords that suggest document-related queries (Spanish and English)
+    const documentKeywords = [
+      'documento', 'pdf', 'archivo', 'dice', 'según', 'menciona',
+      'explica', 'describe', 'en el documento', 'en el archivo',
+      'en el pdf', 'busca', 'encuentra', 'qué dice', 'cómo explica',
+      'dónde menciona', 'habla sobre', 'trata sobre', 'información sobre',
+      'document', 'file', 'says', 'according to', 'mentions', 'explains',
+      'describes', 'in the document', 'in the file', 'in the pdf',
+      'search', 'find', 'what does it say', 'how does it explain',
+      'where does it mention', 'talks about', 'information about'
+    ];
+
+    // Check if any document keyword is present
+    const hasDocumentKeyword = documentKeywords.some(keyword =>
+      lowerQuery.includes(keyword)
+    );
+
+    // Exclude common greetings and small talk
+    const greetingPatterns = [
+      /^hola/i, /^buenos días/i, /^buenas tardes/i, /^buenas noches/i,
+      /^hello/i, /^hi\b/i, /^hey/i, /^good morning/i, /^good afternoon/i,
+      /cómo estás/i, /cómo está/i, /how are you/i,
+      /^gracias/i, /^thank you/i, /^thanks/i,
+      /^adiós/i, /^chau/i, /^bye/i, /^goodbye/i
+    ];
+
+    const isGreeting = greetingPatterns.some(pattern => pattern.test(lowerQuery));
+
+    if (isGreeting) {
+      return false;
+    }
+
+    return hasDocumentKeyword;
+  }
+
   protected firstUpdated(): void {
     // FIX: Cast this to any to access renderRoot to avoid TS errors regarding missing properties on LitElement.
     this.videoElement = (this as any).renderRoot.querySelector(
@@ -527,14 +574,17 @@ export class GdmLiveAudio extends LitElement {
 
       systemInstructionText = `You are a helpful assistant with access to a vector database containing ${totalChunks} chunks from ${this.pdfChunks.size} PDF document(s): ${fileNames}.
 
-IMPORTANT: When a user asks a question, you will automatically receive relevant excerpts from these documents through semantic search. These excerpts will be provided to you in the format:
+You can engage in general conversation, but when users ask specific questions about the documents (using keywords like "documento", "PDF", "dice", "según", "explica", etc.), you will receive relevant excerpts from these documents through semantic search in this format:
 
 --- RELEVANT DOCUMENT EXCERPTS ---
 [Excerpt N from "filename" (relevance: X%)]
 <text content>
 --- END OF EXCERPTS ---
 
-Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don't contain the answer, clearly state that you cannot find the information in the available documents. Always cite which document excerpt you're using when answering.`;
+When excerpts are provided: Answer based EXCLUSIVELY on those excerpts and always cite which document you're using.
+When no excerpts are provided: Respond naturally to general conversation without referencing the documents.
+
+If a user seems interested but hasn't asked about the documents yet, you can mention that you have access to ${this.pdfChunks.size} document(s) they can ask about.`;
 
       this.updateStatus(`🔍 Qdrant RAG mode: ${totalChunks} chunks indexed`);
     } else if (this.pdfChunks.size > 0) {
@@ -621,11 +671,14 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
 
               if (serverContent.turnComplete) {
                 if (this.currentInputTranscription.trim()) {
-                  // Perform semantic search in Qdrant if available
-                  if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0) {
+                  // Check if user intent suggests they want document information
+                  const query = this.currentInputTranscription.trim();
+                  const shouldSearch = this.shouldSearchDocuments(query);
+
+                  // Perform semantic search in Qdrant only if user is asking about documents
+                  if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0 && shouldSearch) {
                     try {
-                      const query = this.currentInputTranscription.trim();
-                      console.log(`Searching Qdrant for: "${query}"`);
+                      console.log(`[Intent Detected] Searching Qdrant for: "${query}"`);
 
                       const relevantChunks = await this.qdrantService.searchRelevantChunks(query, 5);
 
@@ -647,11 +700,13 @@ Answer questions based EXCLUSIVELY on the provided excerpts. If the excerpts don
                           console.log('Sent relevant context to model');
                         }
                       } else {
-                        console.log('No relevant chunks found');
+                        console.log('No relevant chunks found for document query');
                       }
                     } catch (error) {
                       console.error('Error performing semantic search:', error);
                     }
+                  } else if (this.pdfChunks.size > 0 && !shouldSearch) {
+                    console.log(`[General Conversation] Skipping Qdrant search for: "${query}"`);
                   }
 
                   this.transcriptionHistory = [

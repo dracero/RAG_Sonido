@@ -287,11 +287,16 @@ export class QdrantService {
         limit: number = 5
     ): Promise<Array<{ text: string; fileName: string; score: number }>> {
         try {
-            const queryEmbedding = await this.generateEmbedding(query);
+            // Clean the query text before embedding (same as when storing chunks)
+            const cleanedQuery = this.cleanText(query);
+            console.log(`[QdrantService] Generating embedding for search query: "${cleanedQuery}"`);
+            const queryEmbedding = await this.generateEmbedding(cleanedQuery);
+            console.log(`[QdrantService] Query embedding dimension: ${queryEmbedding.length}`);
 
             const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
             const searchUrl = `${baseUrl}/collections/${this.collectionName}/points/search`;
 
+            console.log(`[QdrantService] Searching with limit: ${limit}`);
             const response = await fetch(searchUrl, {
                 method: 'POST',
                 headers: {
@@ -314,6 +319,17 @@ export class QdrantService {
 
             const result = await response.json();
             const points = result.result?.points ?? [];
+
+            console.log(`[QdrantService] Found ${points.length} results`);
+            if (points.length > 0) {
+                console.log(`[QdrantService] Top result score: ${points[0]?.score?.toFixed(4)}`);
+                console.log(`[QdrantService] Search results:`, points.map((p: any) => ({
+                    fileName: p.payload?.fileName,
+                    score: p.score?.toFixed(4),
+                    textPreview: p.payload?.text?.substring(0, 100)
+                })));
+            }
+
             return points.map((p: any) => ({
                 text: p.payload?.text ?? '',
                 fileName: p.payload?.fileName ?? '',
