@@ -1,7 +1,8 @@
 {
-    "functions": {
-        "api/qdrant.js": {
-            "maxDuration": 30
+    "rewrites": [
+        {
+            "source": "/api/qdrant/:path*",
+            "destination": "/api/qdrant/:path*"
         }
-    }
+    ]
 }

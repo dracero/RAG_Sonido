@@ -1,8 +1,8 @@
 /**
  * Vercel Serverless Function to proxy requests to Qdrant
- * This handles all requests to /api/qdrant and forwards them to the Qdrant service
+ * Handles all /api/qdrant/* routes
  */
-export default async function handler(req, res) {
+module.exports = async (req, res) => {
     // Enable CORS
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,31 +19,36 @@ export default async function handler(req, res) {
     const qdrantApiKey = process.env.QDRANT_KEY;
 
     if (!qdrantUrl || !qdrantApiKey) {
-        console.error('[Qdrant Proxy] Missing credentials');
+        console.error('[Qdrant Proxy] Missing env vars:', {
+            hasUrl: !!qdrantUrl,
+            hasKey: !!qdrantApiKey
+        });
         return res.status(500).json({
             error: 'Qdrant configuration missing',
-            details: 'QDRANT_URL or QDRANT_KEY not set in environment variables'
+            details: 'QDRANT_URL or QDRANT_KEY not set'
         });
     }
 
-    // Extract the path after /api/qdrant
-    // req.url will be something like /api/qdrant/collections or /api/qdrant/collections/RAG_Sonido
-    let targetPath = req.url.replace('/api/qdrant', '');
-
-    // Remove leading slash if present
-    if (targetPath.startsWith('/')) {
-        targetPath = targetPath.substring(1);
-    }
+    // Extract the full path after /api/qdrant/
+    // In Vercel, req.url for /api/qdrant/collections would be just /collections
+    // We need to reconstruct the full path
+    const pathSegments = req.query.path || [];
+    const fullPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
 
     // Build the target URL
     const baseUrl = qdrantUrl.endsWith('/') ? qdrantUrl.slice(0, -1) : qdrantUrl;
-    const targetUrl = targetPath ? `${baseUrl}/${targetPath}` : baseUrl;
+    const targetUrl = fullPath ? `${baseUrl}/${fullPath}` : baseUrl;
 
-    console.log(`[Qdrant Proxy] ${req.method} ${targetUrl}`);
+    // Preserve query parameters
+    const queryIndex = req.url.indexOf('?');
+    const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : '';
+    const finalUrl = targetUrl + queryString;
+
+    console.log(`[Qdrant Proxy] ${req.method} ${finalUrl}`);
 
     try {
-        // Prepare request options
-        const options = {
+        // Prepare fetch options
+        const fetchOptions = {
             method: req.method,
             headers: {
                 'api-key': qdrantApiKey,
@@ -53,11 +58,11 @@ export default async function handler(req, res) {
 
         // Add body for non-GET/HEAD requests
         if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-            options.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+            fetchOptions.body = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
         }
 
         // Forward the request to Qdrant
-        const response = await fetch(targetUrl, options);
+        const response = await fetch(finalUrl, fetchOptions);
 
         // Get response data
         const contentType = response.headers.get('content-type');
@@ -71,18 +76,17 @@ export default async function handler(req, res) {
 
         console.log(`[Qdrant Proxy] Response: ${response.status}`);
 
-        // Return the response from Qdrant
+        // Return the response
         if (typeof data === 'string') {
             return res.status(response.status).send(data);
-        } else {
-            return res.status(response.status).json(data);
         }
+        return res.status(response.status).json(data);
 
     } catch (error) {
-        console.error('[Qdrant Proxy] Error:', error);
+        console.error('[Qdrant Proxy] Error:', error.message);
         return res.status(500).json({
             error: 'Failed to proxy request to Qdrant',
             details: error.message
         });
     }
-}
+};
