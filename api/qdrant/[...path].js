@@ -35,6 +35,13 @@ module.exports = async (req, res) => {
     const pathSegments = req.query.path || [];
     const fullPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
 
+    console.log('[Qdrant Proxy] Received request:', {
+        method: req.method,
+        url: req.url,
+        pathSegments,
+        fullPath
+    });
+
     // Build the target URL
     const baseUrl = qdrantUrl.endsWith('/') ? qdrantUrl.slice(0, -1) : qdrantUrl;
     const targetUrl = fullPath ? `${baseUrl}/${fullPath}` : baseUrl;
@@ -44,7 +51,7 @@ module.exports = async (req, res) => {
     const queryString = queryIndex !== -1 ? req.url.substring(queryIndex) : '';
     const finalUrl = targetUrl + queryString;
 
-    console.log(`[Qdrant Proxy] ${req.method} ${finalUrl}`);
+    console.log(`[Qdrant Proxy] Forwarding ${req.method} to: ${finalUrl}`);
 
     try {
         // Prepare fetch options
