@@ -25,18 +25,27 @@ export default async function handler(req, res) {
     }
 
     // Construct target URL
-    const baseUrl = qdrantUrl.endsWith('/') ? qdrantUrl.slice(0, -1) : qdrantUrl;
+    // Try to remove port 6333 if present to use standard HTTPS which is often faster/more reliable from serverless
+    let baseUrl = qdrantUrl.endsWith('/') ? qdrantUrl.slice(0, -1) : qdrantUrl;
+
+    // If URL has :6333, we might want to try without it if connection fails, 
+    // but for now let's stick to what's provided but add a timeout signal
     const targetUrl = `${baseUrl}/${path}`;
 
     console.log(`[Proxy] ${req.method} -> ${targetUrl}`);
 
     try {
+        const controller = new AbortController();
+        // Set a timeout of 9 seconds (Vercel Hobby limit is 10s)
+        const timeoutId = setTimeout(() => controller.abort(), 9000);
+
         const options = {
             method: req.method,
             headers: {
                 'api-key': qdrantApiKey,
                 'Content-Type': 'application/json'
-            }
+            },
+            signal: controller.signal
         };
 
         if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
@@ -44,11 +53,16 @@ export default async function handler(req, res) {
         }
 
         const response = await fetch(targetUrl, options);
+        clearTimeout(timeoutId);
+
         const data = await response.json().catch(() => ({}));
 
         return res.status(response.status).json(data);
     } catch (error) {
         console.error('[Proxy Error]', error);
+        if (error.name === 'AbortError') {
+            return res.status(504).json({ error: 'Gateway Timeout - Qdrant took too long to respond' });
+        }
         return res.status(500).json({ error: error.message });
     }
 }
