@@ -1,7 +1,7 @@
 /**
  * Debug endpoint to test Qdrant connectivity from Vercel
  */
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
     const qdrantUrl = process.env.QDRANT_URL;
     const qdrantApiKey = process.env.QDRANT_KEY;
 
@@ -19,7 +19,7 @@ module.exports = async (req, res) => {
         });
     }
 
-    // Test 1: Try to connect to Qdrant root
+    // Test: Try to connect to Qdrant
     const baseUrl = qdrantUrl.endsWith('/') ? qdrantUrl.slice(0, -1) : qdrantUrl;
     const testUrl = `${baseUrl}/collections`;
 
@@ -57,4 +57,4 @@ module.exports = async (req, res) => {
             url: testUrl
         });
     }
-};
+}

@@ -1,7 +1,7 @@
 /**
- * Vercel Serverless Function - Health Check for Qdrant Proxy
+ * Vercel Serverless Function - Health Check
  */
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
     console.log('[Health Check] Endpoint accessed');
 
     const hasUrl = !!process.env.QDRANT_URL;
@@ -16,4 +16,4 @@ module.exports = async (req, res) => {
             nodeVersion: process.version
         }
     });
-};
+}

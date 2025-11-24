@@ -2,7 +2,7 @@
  * Vercel Serverless Function to proxy requests to Qdrant
  * Handles all /api/qdrant/* routes
  */
-module.exports = async (req, res) => {
+export default async function handler(req, res) {
     // Enable CORS
     res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -30,8 +30,6 @@ module.exports = async (req, res) => {
     }
 
     // Extract the full path after /api/qdrant/
-    // In Vercel, req.url for /api/qdrant/collections would be just /collections
-    // We need to reconstruct the full path
     const pathSegments = req.query.path || [];
     const fullPath = Array.isArray(pathSegments) ? pathSegments.join('/') : pathSegments;
 
@@ -96,4 +94,4 @@ module.exports = async (req, res) => {
             details: error.message
         });
     }
-};
+}
