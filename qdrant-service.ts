@@ -38,6 +38,24 @@ export class QdrantService {
     }
 
     /**
+     * Helper to construct URL for proxy or direct access
+     */
+    private getUrl(path: string): string {
+        // If we are using the Vercel proxy (URL contains /api/qdrant), switch to simple proxy
+        if (this.debugUrl.includes('/api/qdrant')) {
+            const baseUrl = this.debugUrl.replace('/api/qdrant', '/api/proxy');
+            // Ensure path doesn't start with /
+            const cleanPath = path.startsWith('/') ? path.substring(1) : path;
+            return `${baseUrl}?path=${encodeURIComponent(cleanPath)}`;
+        }
+
+        // Standard URL construction
+        const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
+        const cleanPath = path.startsWith('/') ? path : `/${path}`;
+        return `${baseUrl}${cleanPath}`;
+    }
+
+    /**
      * Initialize the embedding pipeline
      */
     private async initPipeline() {
@@ -58,7 +76,7 @@ export class QdrantService {
             // Check if collection exists using fetch
             let exists = false;
             try {
-                const collectionsUrl = `${this.debugUrl}/collections`;
+                const collectionsUrl = this.getUrl('collections');
                 const response = await fetch(collectionsUrl, {
                     headers: {
                         'api-key': this.debugApiKey,
@@ -83,9 +101,7 @@ export class QdrantService {
                 console.log(`Creating collection: ${this.collectionName}`);
                 try {
                     // Use fetch directly since client.createCollection fails with proxy path
-                    // Handle potential double slash if debugUrl ends with /
-                    const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
-                    const createUrl = `${baseUrl}/collections/${this.collectionName}`;
+                    const createUrl = this.getUrl(`collections/${this.collectionName}`);
 
                     console.log(`[QdrantService] Sending PUT request to ${createUrl}`);
 
@@ -254,8 +270,8 @@ export class QdrantService {
         }
 
         // Use fetch for upsert to ensure correct path usage
-        const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
-        const upsertUrl = `${baseUrl}/collections/${this.collectionName}/points?wait=true`;
+        // Use fetch for upsert to ensure correct path usage
+        const upsertUrl = this.getUrl(`collections/${this.collectionName}/points?wait=true`);
 
         const response = await fetch(upsertUrl, {
             method: 'PUT',
@@ -293,8 +309,7 @@ export class QdrantService {
             const queryEmbedding = await this.generateEmbedding(cleanedQuery);
             console.log(`[QdrantService] Query embedding dimension: ${queryEmbedding.length}`);
 
-            const baseUrl = this.debugUrl.endsWith('/') ? this.debugUrl.slice(0, -1) : this.debugUrl;
-            const searchUrl = `${baseUrl}/collections/${this.collectionName}/points/search`;
+            const searchUrl = this.getUrl(`collections/${this.collectionName}/points/search`);
 
             console.log(`[QdrantService] Searching with limit: ${limit}`);
             const response = await fetch(searchUrl, {
@@ -370,7 +385,8 @@ export class QdrantService {
         try {
             console.log(`[QdrantService] Clearing collection ${this.collectionName}...`);
             // Use fetch for deletion to ensure correct path usage
-            const deleteUrl = `${this.debugUrl}/collections/${this.collectionName}`;
+            // Use fetch for deletion to ensure correct path usage
+            const deleteUrl = this.getUrl(`collections/${this.collectionName}`);
             console.log(`[QdrantService] Sending DELETE request to ${deleteUrl}`);
 
             const response = await fetch(deleteUrl, {
