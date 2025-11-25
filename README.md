@@ -40,8 +40,12 @@ QDRANT_API_KEY=your_qdrant_api_key
 
 ### With Qdrant (RAG Mode)
 - PDFs are split into chunks and stored in Qdrant vector database
-- Each chunk is embedded using Google's `text-embedding-004` model (768 dimensions)
-- **Real-time semantic search**: When you ask a question, the system:
+- Each chunk is embedded using the `Xenova/all-MiniLM-L6-v2` model (384 dimensions)
+- **Intelligent query detection**: The system analyzes your question to determine if it's document-related
+  - Only queries containing document keywords trigger Qdrant searches (e.g., "documento", "PDF", "qué dice", "según el", "explica")
+  - General conversation bypasses Qdrant (e.g., greetings, casual chat)
+  - This improves response time and reduces unnecessary API calls
+- **Real-time semantic search**: When a document-related question is detected:
   1. Captures your speech transcription
   2. Performs semantic search in Qdrant to find the 5 most relevant chunks
   3. Automatically sends these chunks as context to the AI
@@ -92,9 +96,10 @@ npm run build
 
 ### Qdrant Integration
 - **Collection**: `RAG_Sonido`
-- **Vector Size**: 768 dimensions
+- **Vector Size**: 384 dimensions
 - **Distance Metric**: Cosine similarity
-- **Embedding Model**: `text-embedding-004` (Google)
+- **Embedding Model**: `Xenova/all-MiniLM-L6-v2` (runs in browser via Transformers.js)
+- **Query Detection**: Keyword-based detection to determine when to search documents
 
 ### Real-Time RAG Workflow
 When Qdrant is enabled, the system performs intelligent context retrieval:

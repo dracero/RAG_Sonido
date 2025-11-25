@@ -312,18 +312,23 @@ export class QdrantService {
 
             const searchUrl = this.getUrl(`collections/${this.collectionName}/points/search`);
 
+            const searchPayload = {
+                vector: queryEmbedding,
+                limit: limit,
+                with_payload: true
+            };
+
             console.log(`[QdrantService] Searching with limit: ${limit}`);
+            console.log(`[QdrantService] Search URL: ${searchUrl}`);
+            console.log(`[QdrantService] Vector first 5 values:`, queryEmbedding.slice(0, 5));
+
             const response = await fetch(searchUrl, {
                 method: 'POST',
                 headers: {
                     'api-key': this.debugApiKey,
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    vector: queryEmbedding,
-                    limit: limit,
-                    with_payload: true
-                })
+                body: JSON.stringify(searchPayload)
             });
 
             if (!response.ok) {
@@ -334,7 +339,9 @@ export class QdrantService {
             }
 
             const result = await response.json();
-            const points = result.result?.points ?? [];
+            console.log(`[QdrantService] Full Qdrant response:`, result);
+
+            const points = result.result?.points ?? result.result ?? [];
 
             console.log(`[QdrantService] Found ${points.length} results`);
             if (points.length > 0) {

@@ -497,14 +497,13 @@ export class GdmLiveAudio extends LitElement {
       return false;
     }
 
-    // Exclude common greetings and small talk
+    // Exclude only very obvious greetings
     const greetingPatterns = [
-      /^hola/i, /^buenos días/i, /^buenas tardes/i, /^buenas noches/i,
-      /^hello/i, /^hi\b/i, /^hey/i, /^good morning/i, /^good afternoon/i,
-      /^cómo estás/i, /^cómo está/i, /^how are you/i,
-      /^gracias/i, /^thank you/i, /^thanks/i,
-      /^adiós/i, /^chau/i, /^bye/i, /^goodbye/i,
-      /^ok/i, /^listo/i, /^entendido/i, /^vale/i
+      /^(hola|hello|hi|hey)\b/i,
+      /^buenos (días|tardes|noches)\b/i,
+      /^good (morning|afternoon|evening|night)\b/i,
+      /^(gracias|thank you|thanks)\b/i,
+      /^(adiós|chau|bye|goodbye)\b/i,
     ];
 
     const isGreeting = greetingPatterns.some(pattern => pattern.test(lowerQuery));
@@ -513,8 +512,7 @@ export class GdmLiveAudio extends LitElement {
       return false;
     }
 
-    // If it's not a greeting and has enough length, assume it might be a question about content
-    // This is much more flexible than looking for specific "document" keywords
+    // For everything else, search in Qdrant if PDFs are loaded
     return true;
   }
 
@@ -659,6 +657,13 @@ When no excerpts are provided: Respond naturally based on your general knowledge
                   const query = this.currentInputTranscription.trim();
                   const shouldSearch = this.shouldSearchDocuments(query);
 
+                  // Debug logging to diagnose Qdrant search issues
+                  console.log(`[DEBUG] Query: "${query}"`);
+                  console.log(`[DEBUG] useQdrant: ${this.useQdrant}`);
+                  console.log(`[DEBUG] qdrantService exists: ${!!this.qdrantService}`);
+                  console.log(`[DEBUG] pdfChunks.size: ${this.pdfChunks.size}`);
+                  console.log(`[DEBUG] shouldSearch: ${shouldSearch}`);
+
                   // Perform semantic search in Qdrant only if user is asking about documents
                   if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0 && shouldSearch) {
                     try {
@@ -689,8 +694,16 @@ When no excerpts are provided: Respond naturally based on your general knowledge
                     } catch (error) {
                       console.error('Error performing semantic search:', error);
                     }
-                  } else if (this.pdfChunks.size > 0 && !shouldSearch) {
-                    console.log(`[General Conversation] Skipping Qdrant search for: "${query}"`);
+                  } else {
+                    console.log(`[DEBUG] NOT searching Qdrant because:`, {
+                      useQdrant: this.useQdrant,
+                      hasService: !!this.qdrantService,
+                      hasPdfs: this.pdfChunks.size > 0,
+                      shouldSearch: shouldSearch
+                    });
+                    if (this.pdfChunks.size > 0 && !shouldSearch) {
+                      console.log(`[General Conversation] Skipping Qdrant search for: "${query}"`);
+                    }
                   }
 
                   this.transcriptionHistory = [
@@ -1051,6 +1064,8 @@ When no excerpts are provided: Respond naturally based on your general knowledge
   private async handlePdfUpload(e: Event) {
     const input = e.target as HTMLInputElement;
     const files = input.files;
+    console.log('[DEBUG PDF] handlePdfUpload called, files:', files?.length || 0);
+
     if (!files || files.length === 0) return;
 
     this.isProcessingPdf = true;
@@ -1059,16 +1074,20 @@ When no excerpts are provided: Respond naturally based on your general knowledge
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      console.log(`[DEBUG PDF] Processing file ${i + 1}/${files.length}: ${file.name} (${fileSizeMB} MB)`);
       this.updateStatus(`Processing PDF ${i + 1}/${files.length}: ${file.name} (${fileSizeMB} MB)`);
 
       try {
         const text = await this.processSinglePdf(file);
+        console.log(`[DEBUG PDF] Extracted text from ${file.name}, length: ${text.length} characters`);
         newContents.set(file.name, text);
       } catch (err) {
         console.error(`Error processing ${file.name}:`, err);
         this.updateError(`Failed to process ${file.name}: ${err.message}`);
       }
     }
+
+    console.log(`[DEBUG PDF] Finished processing ${newContents.size} files`);
 
     // Convert text to chunks and store
     for (const [name, text] of newContents.entries()) {
@@ -1077,7 +1096,8 @@ When no excerpts are provided: Respond naturally based on your general knowledge
       }
       const chunks = this.splitTextIntoChunks(text);
       this.pdfChunks.set(name, chunks);
-      console.log(`PDF "${name}" split into ${chunks.length} chunks`);
+      console.log(`[DEBUG PDF] PDF "${name}" split into ${chunks.length} chunks`);
+      console.log(`[DEBUG PDF] pdfChunks.size is now: ${this.pdfChunks.size}`);
     }
 
     // If using Qdrant, clear the collection and re-upload ALL PDFs

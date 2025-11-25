@@ -34,10 +34,9 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [],
     define: {
-      'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
-      'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
+      'process.env.API_KEY': JSON.stringify(env.API_KEY),
       'process.env.QDRANT_URL': JSON.stringify('/api/qdrant'),
-      'process.env.QDRANT_API_KEY': JSON.stringify(env.QDRANT_KEY)
+      'process.env.QDRANT_API_KEY': JSON.stringify(env.QDRANT_API_KEY)
     },
     resolve: {
       alias: {
