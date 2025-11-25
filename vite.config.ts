@@ -8,29 +8,32 @@ export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, '.', '');
   console.log('Vite Proxy Target:', env.QDRANT_URL); // Debug log
 
+  // Only configure proxy if Q QDRANT_URL is provided
+  const proxyConfig = env.QDRANT_URL ? {
+    '/api/qdrant': {
+      target: env.QDRANT_URL,
+      changeOrigin: true,
+      secure: false,
+      rewrite: (path) => path.replace(/^\/api\/qdrant/, ''),
+      configure: (proxy, _options) => {
+        proxy.on('error', (err, _req, _res) => {
+          console.log('proxy error', err);
+        });
+        proxy.on('proxyReq', (proxyReq, req, _res) => {
+          console.log('Sending Request to the Target:', req.method, req.url);
+        });
+        proxy.on('proxyRes', (proxyRes, req, _res) => {
+          console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
+        });
+      },
+    }
+  } : {};
+
   return {
     server: {
       port: 3000,
       host: '0.0.0.0',
-      proxy: {
-        '/api/qdrant': {
-          target: env.QDRANT_URL,
-          changeOrigin: true,
-          secure: false,
-          rewrite: (path) => path.replace(/^\/api\/qdrant/, ''),
-          configure: (proxy, _options) => {
-            proxy.on('error', (err, _req, _res) => {
-              console.log('proxy error', err);
-            });
-            proxy.on('proxyReq', (proxyReq, req, _res) => {
-              console.log('Sending Request to the Target:', req.method, req.url);
-            });
-            proxy.on('proxyRes', (proxyRes, req, _res) => {
-              console.log('Received Response from the Target:', proxyRes.statusCode, req.url);
-            });
-          },
-        },
-      },
+      proxy: proxyConfig,
     },
     plugins: [],
     define: {
