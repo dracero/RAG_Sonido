@@ -487,33 +487,13 @@ export class GdmLiveAudio extends LitElement {
 
   /**
    * Determine if the user query is asking about documents
-   * Returns true if the query appears to be document-related
+   * Returns true only if the user mentions "base" in their query
    */
   private shouldSearchDocuments(query: string): boolean {
     const lowerQuery = query.toLowerCase().trim();
 
-    // If query is too short (e.g. "ok", "si", "no"), don't search
-    if (lowerQuery.length < 4) {
-      return false;
-    }
-
-    // Exclude only very obvious greetings
-    const greetingPatterns = [
-      /^(hola|hello|hi|hey)\b/i,
-      /^buenos (días|tardes|noches)\b/i,
-      /^good (morning|afternoon|evening|night)\b/i,
-      /^(gracias|thank you|thanks)\b/i,
-      /^(adiós|chau|bye|goodbye)\b/i,
-    ];
-
-    const isGreeting = greetingPatterns.some(pattern => pattern.test(lowerQuery));
-
-    if (isGreeting) {
-      return false;
-    }
-
-    // For everything else, search in Qdrant if PDFs are loaded
-    return true;
+    // Only search Qdrant if the user explicitly mentions "base"
+    return lowerQuery.includes('base');
   }
 
   protected firstUpdated(): void {
@@ -557,6 +537,8 @@ export class GdmLiveAudio extends LitElement {
       const fileNames = Array.from(this.pdfChunks.keys()).join(', ');
 
       systemInstructionText = `You are a helpful assistant with access to a vector database containing ${totalChunks} chunks from ${this.pdfChunks.size} PDF document(s): ${fileNames}.
+
+IMPORTANT: When speaking (audio output), use a Rioplatense accent (Argentine/Uruguayan Spanish). Use characteristic intonation patterns and pronunciation like "sh" sound for "ll" and "y" (yeísmo rehilado).
 
 You can engage in general conversation. When users ask questions that might be related to the documents, you will receive relevant excerpts through semantic search in this format:
 
@@ -605,10 +587,12 @@ When no excerpts are provided: Respond naturally based on your general knowledge
         this.updateStatus(`📄 Loaded ${totalChunks} chunks from ${this.pdfChunks.size} PDF(s)`);
       }
 
-      systemInstructionText = `You are a helpful assistant. Please answer the user's questions based exclusively on the content of the following documents. The documents have been split into chunks for processing. If the answer is not in the provided chunks, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`;
+      systemInstructionText = `You are a helpful assistant. When speaking (audio output), use a Rioplatense accent (Argentine/Uruguayan Spanish). Use characteristic intonation patterns and pronunciation.
+
+Please answer the user's questions based exclusively on the content of the following documents. The documents have been split into chunks for processing. If the answer is not in the provided chunks, say that you cannot find the information in the provided text.\n\nDOCUMENT CONTENT:\n${combinedPdfText}`;
     }
 
-    const systemInstruction = systemInstructionText || undefined;
+    const systemInstruction = systemInstructionText || 'You are a helpful assistant. When speaking (audio output), use a Rioplatense accent (Argentine/Uruguayan Spanish). Use characteristic intonation patterns and pronunciation like "sh" sound for "ll" and "y" (yeísmo rehilado).';
 
     // Prepare tools configuration
     const tools: Tool[] = [];
@@ -665,7 +649,8 @@ When no excerpts are provided: Respond naturally based on your general knowledge
                   console.log(`[DEBUG] shouldSearch: ${shouldSearch}`);
 
                   // Perform semantic search in Qdrant only if user is asking about documents
-                  if (this.useQdrant && this.qdrantService && this.pdfChunks.size > 0 && shouldSearch) {
+                  // Note: We don't check pdfChunks.size because documents might already be in Qdrant from previous sessions
+                  if (this.useQdrant && this.qdrantService && shouldSearch) {
                     try {
                       console.log(`[Intent Detected] Searching Qdrant for: "${query}"`);
 
@@ -843,7 +828,13 @@ When no excerpts are provided: Respond naturally based on your general knowledge
         const inputBuffer = audioProcessingEvent.inputBuffer;
         const pcmData = inputBuffer.getChannelData(0);
 
-        this.session.sendRealtimeInput({ media: createBlob(pcmData) });
+        try {
+          this.session.sendRealtimeInput({ media: createBlob(pcmData) });
+        } catch (error) {
+          // WebSocket may be closing/closed, stop recording to prevent further errors
+          console.warn('Failed to send audio data, session may be closed:', error);
+          this.stopRecording();
+        }
       };
 
       this.sourceNode.connect(this.scriptProcessorNode);
@@ -886,12 +877,18 @@ When no excerpts are provided: Respond naturally based on your general knowledge
     const base64Data = dataUrl.split(',')[1];
 
     if (base64Data) {
-      this.session.sendRealtimeInput({
-        media: {
-          data: base64Data,
-          mimeType: 'image/jpeg',
-        },
-      });
+      try {
+        this.session.sendRealtimeInput({
+          media: {
+            data: base64Data,
+            mimeType: 'image/jpeg',
+          },
+        });
+      } catch (error) {
+        // WebSocket may be closing/closed, stop recording to prevent further errors
+        console.warn('Failed to send video frame, session may be closed:', error);
+        this.stopRecording();
+      }
     }
   }
 
