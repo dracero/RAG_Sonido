@@ -12,7 +12,7 @@ export default async function handler(req, res) {
     if (req.method === 'OPTIONS') return res.status(200).end();
 
     const qdrantUrl = process.env.QDRANT_URL;
-    const qdrantApiKey = process.env.QDRANT_KEY;
+    const qdrantApiKey = process.env.QDRANT_API_KEY;
 
     if (!qdrantUrl || !qdrantApiKey) {
         return res.status(500).json({ error: 'Missing configuration' });
